@@ -28,6 +28,18 @@ export default testMatrix.setupSchema(
     @@id([scope, name])
   }
 
+  model RelatedCounter {
+    id       String @id
+    clicks   Int
+    children Child[]
+  }
+
+  model Child {
+    id        Int @id
+    counterId String
+    counter   RelatedCounter @relation(fields: [counterId], references: [id])
+  }
+
   model MultipleKeys {
     id     Int    @id
     name   String @unique

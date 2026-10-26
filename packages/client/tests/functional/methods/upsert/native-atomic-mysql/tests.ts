@@ -6,17 +6,19 @@ import type { PrismaClient } from './generated/prisma/client'
 declare const newPrismaClient: NewPrismaClient<PrismaClient, typeof PrismaClient>
 
 testMatrix.setupTestSuite(
-  () => {
+  ({ relationMode }) => {
     let prisma: PrismaClient
     const queries: string[] = []
 
     beforeAll(() => {
       prisma = newPrismaClient({ log: [{ emit: 'event', level: 'query' }] })
-      // @ts-expect-error -- the generated test client does not expose query event types
+      // @ts-expect-error: the generated test client does not expose query event types
       prisma.$on('query', (event: { query: string }) => queries.push(event.query))
     })
 
     beforeEach(async () => {
+      await prisma.child.deleteMany()
+      await prisma.relatedCounter.deleteMany()
       await prisma.counter.deleteMany()
       await prisma.compoundCounter.deleteMany()
       await prisma.multipleKeys.deleteMany()
@@ -27,7 +29,7 @@ testMatrix.setupTestSuite(
     afterAll(() => prisma.$disconnect())
 
     test('concurrent first clicks all increment the same counter and return their own result', async () => {
-      const results = await Promise.allSettled(
+      const counters = await Promise.all(
         Array.from({ length: 10 }, () =>
           prisma.counter.upsert({
             where: { id: 'counter' },
@@ -38,8 +40,6 @@ testMatrix.setupTestSuite(
         ),
       )
 
-      expect(results.map((result) => result.status)).toEqual(Array(10).fill('fulfilled'))
-      const counters = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
       expect(counters.sort((a, b) => a.clicks - b.clicks)).toEqual(
         Array.from({ length: 10 }, (_, i) => ({ id: 'counter', clicks: i + 1 })),
       )
@@ -78,6 +78,22 @@ testMatrix.setupTestSuite(
         ).toEqual({ scope: 'scope', name: 'counter', clicks })
       }
       expect(queries.filter((query) => query.includes('ON DUPLICATE KEY UPDATE'))).toHaveLength(2)
+    })
+
+    test('models with relations use native upsert only with database foreign keys', async () => {
+      for (let clicks = 1; clicks <= 2; clicks++) {
+        expect(
+          await prisma.relatedCounter.upsert({
+            where: { id: 'counter' },
+            create: { id: 'counter', clicks: 1 },
+            update: { clicks: { increment: 1 } },
+          }),
+        ).toEqual({ id: 'counter', clicks })
+      }
+
+      expect(queries.filter((query) => query.includes('ON DUPLICATE KEY UPDATE'))).toHaveLength(
+        relationMode === 'foreignKeys' ? 2 : 0,
+      )
     })
 
     test('a collision on a different unique key still fails instead of updating the wrong row', async () => {
